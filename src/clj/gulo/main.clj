@@ -18,17 +18,20 @@
     (harvest publishers csv-file)))
 
 (defmain Shred
-  "Shred a CSV file containing Darwin Core records into the VertNet schema."
-  [harvest-path hfs-path tables-path]
-  (let [csv-file (str harvest-path "/dwc.csv")
+  "Shred sequence file preprocessed using Fossa to eliminate bad values, etc."
+  [fossa-path hfs-path]
+  (let [tmp-loc "/tmp/data"
+        occ-src (->> (hfs-seqfile fossa-path)
+                     (filter-infrequent)
+                     (?- (hfs-textline tmp-loc :sinkmode :replace)))
         hfs-tax (str hfs-path "/tax")
         hfs-loc (str hfs-path "/loc")
         hfs-tax-loc (str hfs-path "/taxloc")
         hfs-occ (str hfs-path "/occ")]
-    (location-table (hfs-textline csv-file) hfs-loc)
-    (taxon-table (hfs-textline csv-file) hfs-tax)
-    (tax-loc-table csv-file hfs-tax hfs-loc hfs-tax-loc)
-    (occ-table csv-file hfs-tax hfs-loc hfs-tax-loc hfs-occ)))
+    (location-table (hfs-textline tmp-loc) hfs-loc)
+    (taxon-table (hfs-textline tmp-loc) hfs-tax)
+    (tax-loc-table tmp-loc hfs-tax hfs-loc hfs-tax-loc)
+    (occ-table tmp-loc hfs-tax hfs-loc hfs-tax-loc hfs-occ)))
 
 (defn PrepareTables
   "Prepare table files for upload to CartoDB."
@@ -39,4 +42,3 @@
   "Wire CartoDB tables by adding indexes and deleting unused columns."
   []
   (wire-tables))
-
