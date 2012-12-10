@@ -137,7 +137,7 @@
   "Filter out records for scientific names
    that have fewer observations than MIN-OBS"
   [occ-src]
-  (let [to-keep (set (ffirst (??- (obs-with-min occ-src))))]
+  (let [to-keep (set (flatten (??- (obs-with-min occ-src))))]
     (<- [?name ?occids ?lats ?lons ?precisions ?years ?months ?season]
         (occ-src ?name ?occids ?lats ?lons ?precisions ?years ?months ?season)
         (contains? to-keep ?name))))
