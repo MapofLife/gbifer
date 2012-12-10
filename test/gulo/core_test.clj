@@ -60,17 +60,20 @@
     1 => 1))
 
 (def sample-occ-data
-  (into [["Passer domesticus" "999999999" "-40.8747" "170.851" "" "2007" "6" "5"]]
-        (repeat (inc MIN-OBS) ["Really big ants" "222222222" "-40.8747283" "170.851" "10" "2007" "" ""])))
+  (concat [["Passer domesticus" "999999999" "-40.8747" "170.851" "" "2007" "6" "5"]]
+          (vec (repeat (inc MIN-OBS) ["Really big ants" "222222222" "-40.8747283" "170.851" "10" "2007" "" ""]))
+          (vec (repeat (inc MIN-OBS) ["Tiny ants - they're everywhere!" "222222222" "-40.8747283" "170.851" "10" "2007" "" ""]))))
 
 (fact "test obs-with-min"
-  (obs-with-min sample-occ-data) => (produces [["Really big ants"]]))
+  (obs-with-min sample-occ-data) => (produces [["Really big ants"]
+                                               ["Tiny ants - they're everywhere!"]]))
 
 (fact "Test keeping only records for scientific names with *greater than* MIN-OBS records"
   (let [src (filter-infrequent sample-occ-data)]
     (<- [?name]
         (src ?name _ _ _ _ _ _ _)
-        (:distinct true))) => (produces [["Really big ants"]]))
+        (:distinct true))) => (produces [["Really big ants"]
+                                         ["Tiny ants - they're everywhere!"]]))
 
 (fact
   "Check number of fields."
