@@ -17,6 +17,9 @@
 (def LAT 2)
 (def LON 3)
 
+;; Fields
+(def FIELDS
+  ["?sci-name" "?occ-id" "?lat" "?lon" "?precision" "?year" "?month" "?season"])
 
 (defn- my-filter [& vals] (println (str "VAL--------------" vals)) true)
 
@@ -52,34 +55,29 @@
 (defn occ-table
   "Build occ and tax_loc tables."
   [occ-src tax-src loc-src tax-loc-src occ-sink]
-  (let [fields ["?scientificname" "?occ-id" "?decimallatitude"
-                "?decimallongitude" "?precision" "?year" "?month" "?season"]
-        result-vector (vec (cons "?tax-loc-id" fields))
-        tax-loc-occ-src (<- [?taxon-id ?loc-id ?occ-id ?name ?lat ?lon]
+  (let [result-vector (vec (cons "?tax-loc-id" FIELDS))
+        tax-loc-occ-src (<- [?taxon-id ?loc-id ?occ-id ?sci-name ?lat ?lon]
                             (tax-src ?tax-line)
-                            (splitline ?tax-line :> ?taxon-id ?name)
+                            (splitline ?tax-line :> ?taxon-id ?sci-name)
                             (loc-src ?loc-line)
                             (splitline ?loc-line :> ?loc-id ?lat ?lon _)
-                            (occ-src ?occ-line)
-                            (line->locname ?occ-line :> ?occ-id ?lat ?lon ?name))]
+                            (occ-src :>> FIELDS))]
     (?<- occ-sink
          result-vector
-         (tax-loc-occ-src ?taxon-id ?loc-id ?occ-id ?scientificname ?decimallatitude ?decimallongitude)
+         (tax-loc-occ-src ?taxon-id ?loc-id ?occ-id ?sci-name ?lat ?lon)
          (tax-loc-src ?tax-loc-line)
          (splitline ?tax-loc-line :> ?tax-loc-id ?taxon-id ?loc-id)
-         (occ-src ?occ-line)
-         (splitline ?occ-line :>> fields))))
+         (occ-src :>> FIELDS))))
 
 (defn tax-loc-table
   "Build tax_loc table."
   [occ-src tax-src loc-src tax-loc-sink]
   (let [tax-loc-occ-src (<- [?taxon-id ?loc-id]
                             (tax-src ?tax-line)
-                            (splitline ?tax-line :> ?taxon-id ?name)
+                            (splitline ?tax-line :> ?taxon-id ?sci-name)
                             (loc-src ?loc-line)
                             (splitline ?loc-line :> ?loc-id ?lat ?lon _)
-                            (occ-src ?occ-line)
-                            (line->locname ?occ-line :> ?occ-id ?lat ?lon ?name)
+                            (occ-src :>> FIELDS)
                             (:distinct true))]
     (?<- tax-loc-sink
          [?line]
@@ -96,24 +94,22 @@
   "Create taxon table with unique [uuid name] from supplied source of Darwin Core
   textlines."
   [source sink]
-  (let [uniques (<- [?name]
-                    (source ?line)
-                    (line->name ?line :> _ ?name)
-                    (valid-name? ?name)
+  (let [uniques (<- [?sci-name]
+                    (source :>> FIELDS)
+                    (valid-name? ?sci-name)
                     (:distinct true))]
     (?<- sink
          [?line]
-         (uniques ?name)
+         (uniques ?sci-name)
          (util/gen-uuid :> ?uuid)
-         (makeline ?uuid ?name :> ?line))))
+         (makeline ?uuid ?sci-name :> ?line))))
 
 (defn location-table
   "Create location table with unique lines [uuid lat lon wkt] from supplied
   source of Darwin Core textlines."
   [source sink]
   (let [uniques (<- [?lat ?lon]
-                    (source ?line)
-                    (line->loc ?line :> _ ?lat ?lon)
+                    (source :>> FIELDS)
                     (util/latlon-valid? ?lat ?lon)
                     (:distinct true))]
     (?<- sink
