@@ -11,14 +11,20 @@
 (def sample-occ-data
   [["Passer domesticus" "999999999" "-40.8747" "170.851" "10" "2007" "6" "4"]])
 
+(def sample-occ-missing
+  [["Cute kittens" "999999999" "-40.8747" "170.851" "" "" "" ""]])
+
 (defn big-sample-data
   "Make non-repeating sample data based on sample-occ-data."
   [n]
   (let [ids (range (inc n))
         base-obs (first sample-occ-data)
-        [head tail] [(first base-obs) (rest (rest base-obs))]]
-    (into (vec (map #(into (vector head (str %)) tail) ids))
-          [["Really big ants" "99999999" "-40.8747" "170.851" "10" "2007" "6" "4"]])))
+        [head tail] [(first base-obs) (rest (rest base-obs))]
+        missing-obs (first sample-occ-missing)
+        [missing-head missing-tail] [(first missing-obs) (rest (rest missing-obs))]]
+    (vec (concat (vec (map #(into (vector head (str %)) tail) ids))
+            (vec (map #(into (vector missing-head (str %)) missing-tail) ids))
+            [["Really big ants" "99999999" "-40.8747" "170.851" "10" "2007" "6" "4"]]))))
 
 (defn sink-fake-data
   []
