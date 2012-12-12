@@ -72,10 +72,8 @@
 (defn- wire-occ-table
   [& {:keys [delete drop-geom] :or {delete false drop-geom false}}]
   (if drop-geom (drop-column "occ" "the_geom" :cascade true))
-  (create-index "occ" "occ_id" "occ_occ_id_idx" :unique true)
-  (create-index "occ" "tax_loc_id" "occ_tax_loc_id_idx")
-  (create-index "occ" "_classs" "occ_class_idx" :lower true)
-  (create-index "occ" "icode" "occ_icode_idx" :lower true))
+  (create-index "occ" "occurrenceid" "occ_occurrenceid_idx" :unique true)
+  (create-index "occ" "tax_loc_id" "occ_tax_loc_id_idx"))
 
 (defn- wire-tax-table
   [& {:keys [delete drop-geom] :or {delete false drop-geom false}}]
@@ -106,11 +104,12 @@
 
 (defn s3parts->file
   "Download part files from S3 for supplied table and merge into single file."
-  [table & {:keys [local] :or {local "/mnt/hgfs/Data/vertnet/gulo/hfs/"}}]
+  [table & {:keys [local path] :or {local "/mnt/hgfs/Data/vertnet/gulo/hfs/"
+                                    path "gbifsource/gulo-out/"}}]
   (let [sink (str local table)
         key (:access-key s3-creds)
         secret (:secret-key s3-creds)
-        source (str "s3n://" key  ":" secret "@gulohfs/" table)
+        source (str "s3n://" key  ":" secret "@" path table)
         temp-file (?- (hfs-textline sink)
                       (hfs-textline source))]
     (merge-parts table)))
@@ -133,6 +132,7 @@
         bom (.getPath (io/resource "bom.sh"))]
     (io/delete-file file-path true)
     (io/delete-file zip-path true)
+    (prn source-path " to " file-path)
     (io/copy (io/file source-path) (io/file file-path) :encoding "UTF-8")
     ;; TODO: This sh is brittle business
     (sh "sed" "-i" (str "1i " (join \tab table-cols)) file-path) ;; Add header to file
@@ -146,7 +146,8 @@
         occ-source "/mnt/hgfs/Data/vertnet/gulo/hfs/occ/"
         tax-source "/mnt/hgfs/Data/vertnet/gulo/hfs/tax/"
         loc-source "/mnt/hgfs/Data/vertnet/gulo/hfs/loc/"
-        tax-loc-source "/mnt/hgfs/Data/vertnet/gulo/hfs/taxloc/"]
+        tax-loc-source "/mnt/hgfs/Data/vertnet/gulo/hfs/taxloc/"
+        occ-columns ["tax-loc-id" "scientificname" "occurrenceid" "laty" "lony" "prec" "year" "month" "season"]]
     (prepare-zip "occ" occ-columns occ-source sink)
     (prepare-zip "tax" ["tax_id" "name"] tax-source sink)
     (prepare-zip "loc" ["loc_id" "lat" "lon" "wkt_geom"] loc-source sink)
