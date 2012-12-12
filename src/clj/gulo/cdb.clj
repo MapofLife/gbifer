@@ -104,11 +104,12 @@
 
 (defn s3parts->file
   "Download part files from S3 for supplied table and merge into single file."
-  [table & {:keys [local] :or {local "/mnt/hgfs/Data/vertnet/gulo/hfs/"}}]
+  [table & {:keys [local path] :or {local "/mnt/hgfs/Data/vertnet/gulo/hfs/"
+                                    path "gbifsource/gulo-out/"}}]
   (let [sink (str local table)
         key (:access-key s3-creds)
         secret (:secret-key s3-creds)
-        source (str "s3n://" key  ":" secret "@gulohfs/" table)
+        source (str "s3n://" key  ":" secret "@" path table)
         temp-file (?- (hfs-textline sink)
                       (hfs-textline source))]
     (merge-parts table)))
