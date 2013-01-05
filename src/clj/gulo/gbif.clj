@@ -4,7 +4,8 @@
         [cascalog.more-taps :as taps :only (hfs-delimited)]
         [dwca.core :as dwca])
   (:require [clojure.string :as s]
-            [clojure.java.io :as io])
+            [clojure.java.io :as io]
+            [cascalog.ops :as c])
   (:import [org.gbif.dwc.record DarwinCoreRecord]))
 
 ;; Ordered column names from the occurrence_20120802.txt.gz GBIF dump.
@@ -22,23 +23,137 @@
 ;; Ordered column names for MOL master dataset schema.
 (def mol-fields ["?uuid" "?occurrenceid" "?taxonid" "?dataresourceid" "?kingdom"
                  "?phylum" "?class" "?orderrank" "?family" "?genus"
-                 "?scientificname" "?datecollected" "?year" "?month"
+                 "?scientificname" "?datecollected" "?theyear" "?themonth"
                  "?basisofrecord" "?countryisointerpreted" "?locality"
                  "?county" "?continentorocean" "?stateprovince"
-                 "?latitudeinterpreted" "?longitudeinterpreted"
-                 "?coordinateprecision" "?geospatialissue" "?lastindexed"])
+                 "?lat" "?lon" "?precision" "?geospatialissue" "?lastindexed"
+                 "?season"])
 
 ;; Ordered column names for MOL occ table schema.
 (def occ-fields ["?taxloc-uuid" "?uuid" "?occurrenceid" "?taxonid"
-                 "?dataresourceid" "?datecollected" "?year" "?month"
+                 "?dataresourceid" "?datecollected" "?theyear" "?themonth"
                  "?basisofrecord" "?countryisointerpreted" "?locality" "?county"
-                 "?continentorocean" "?stateprovince" "?coordinateprecision"
-                 "?geospatialissue" "?lastindexed"])
+                 "?continentorocean" "?stateprovince" "?precision"
+                 "?geospatialissue" "?lastindexed" "?season"])
+
+(defn str->num-or-empty-str
+  "Convert a string to a number with read-string and return it. If not a
+   number, return an empty string.
+
+   Try/catch form will catch exception from using read-string with
+   non-decimal degree or entirely wrong lats and lons (a la 5°52.5'N, 6d
+   10m s S, or 0/0/0 - all have been seen in the data).
+
+   Note that this will also handle major errors in the lat/lon fields
+   that may be due to mal-formed or non-standard input text lines that
+   would otherwise cause parsing errors."
+  [s]
+  (try
+    (let [parsed-str (read-string s)]
+      (if (number? parsed-str)
+        parsed-str
+        ""))
+    (catch Exception e "")))
+
+(defn handle-zeros
+  "Handle trailing decimal points and trailing zeros. A trailing decimal
+   point is removed entirely, while trailing zeros are only dropped if
+   they immediately follow the decimal point.
+
+   Usage:
+     (handle-zeros \"3.\")
+     ;=> \"3\"
+
+     (handle-zeros \"3.0\")
+     ;=> \"3\"
+
+     (handle-zeros \"3.00\")
+     ;=> \"3\"
+
+     (handle-zeros \"3.001\")
+     ;=> \"3.001\"
+
+     (handle-zeros \"3.00100\")
+     ;=>\"3.00100\""
+  [s]
+  (let [[head tail] (s/split s #"\.")]
+    (if (or (zero? (count tail)) ;; nothing after decimal place
+            (zero? (Integer/parseInt tail))) ;; all zeros after decimal place
+      (str (Integer/parseInt head))
+      s)))
+
+(defn round-to
+  "Round a value to a given number of decimal places and return a
+   string. Note that this will drop all trailing zeros, and values like
+   3.0 will be returned as \"3\""
+  [digits n]
+  (let [formatter (str "%." (str digits) "f")]
+    (if (= "" n)
+      n
+      (->> (format formatter (double n))
+           reverse
+           (drop-while #{\0})
+           reverse
+           (apply str)
+           (handle-zeros)))))
+
+;; eBird data resource id:
+(def ^:const EBIRD-ID "43")
+
+(defn not-ebird
+  "Return true if supplied id represents an eBird record, otherwise false."
+  [id]
+  (not= id EBIRD-ID))
+
+(def season-map
+  "Encodes seasons as indices: 0-3 for northern hemisphere, 4-7 for the south"
+  {"N winter" 0
+   "N spring" 1
+   "N summer" 2
+   "N fall" 3
+   "S winter" 4
+   "S spring" 5
+   "S summer" 6
+   "S fall" 7})
+
+(defn parse-hemisphere
+  "Returns a quarter->season map based on the hemisphere."
+  [h]
+  (let [n_seasons {0 "winter" 1 "spring" 2 "summer" 3 "fall"}
+        s_seasons {0 "summer" 1 "fall" 2 "winter" 3 "spring"}]
+    (if (= h "N") n_seasons s_seasons)))
+
+(defn get-season-idx
+  "Returns season index (roughly quarter) given a month."
+  [month]
+  {:pre [(>= 12 month)]}
+  (let [season-idxs {11 0 12 0 1 0
+                     2 1 3 1 4 1
+                     5 2 6 2 7 2
+                     8 3 9 3 10 3}]
+    (get season-idxs month)))
+
+(defn get-season
+  "Based on the latitude and the month, return a season index
+   as given in season-map.
+
+   Usage:
+     (get-season 40.0 1)
+     ;=> \"0\""
+  [lat month]
+  (if (= "" month)
+    ""
+    (let [lat (if (string? lat) (read-string lat) lat)
+          month (if (string? month) (read-string month) month)
+          hemisphere (if (pos? lat) "N" "S")
+          season (get (parse-hemisphere hemisphere)
+                      (get-season-idx month))]
+      (str (get season-map (format "%s %s" hemisphere season))))))
 
 (defn makeline
   "Returns a string line by joining a sequence of values on tab."
   [& vals]
-  (clojure.string/join \tab vals))
+  (s/join \tab vals))
 
 (defn split-line
   "Returns vector of line values by splitting on tab."
@@ -75,27 +190,38 @@
   [name]
   (and (not= name nil) (not= name "")))
 
+(defn cleanup-data
+  "Cleanup data by handling rounding, missing data, etc."
+  [digits lat lon prec year month]
+  (let [[lat lon clean-prec clean-year clean-month] (map str->num-or-empty-str [lat lon prec year month])]
+    (concat (map (partial round-to digits) [lat lon clean-prec])
+            (map str [clean-year clean-month]))))
+
 (defn read-occurrences
   "Return Cascalog generator of GBIF tuples with valid Scientific name and
    coordinates."
   [path]
-  (let [src (hfs-textline path)]
+  (let [src (hfs-textline path)
+        sigfigs 7]
     (<- mol-fields
         (src ?line)
         (gen-uuid :> ?uuid)
-        (clojure.string/replace ?line "\\N" "" :> ?clean-line)
+        (s/replace ?line "\\N" "" :> ?clean-line)
         (split-line ?clean-line :>> gbif-fields)
+        (not-ebird ?dataresourceid)
+        (cleanup-data sigfigs ?latitudeinterpreted ?longitudeinterpreted ?coordinateprecision ?year ?month :>
+                      ?lat ?lon ?precision ?theyear ?themonth)
         (valid-latlon? ?latitudeinterpreted ?longitudeinterpreted)
-        (valid-name? ?scientificname))))
+        (valid-name? ?scientificname)
+        (get-season ?lat ?themonth :> ?season))))
 
 (defn occ-query
   "Return generator of unique occurrences with a taxloc-id."
   [tax-source loc-source taxloc-source occ-source]
   (let [uniques (<- [?tax-uuid ?loc-uuid ?occurrenceid ?scientificname ?kingdom
-                     ?phylum ?class ?orderrank ?family ?genus ?latitudeinterpreted
-                     ?longitudeinterpreted]
+                     ?phylum ?class ?orderrank ?family ?genus ?lat ?lon]
                     (tax-source ?tax-uuid ?scientificname ?kingdom ?phylum ?class ?orderrank ?family ?genus)
-                    (loc-source ?loc-uuid ?latitudeinterpreted ?longitudeinterpreted)
+                    (loc-source ?loc-uuid ?lat ?lon)
                     (occ-source :>> mol-fields)
                     (:distinct true))]
     (<- occ-fields
@@ -110,7 +236,7 @@
   taxonomies (via tax-query), unique locations (via loc-query), and occurrence
   source of mol-fields."
   [tax-source loc-source occ-source & {:keys [with-uuid] :or {with-uuid true}}]
-  (let [occ (<- [?latitudeinterpreted ?longitudeinterpreted ?scientificname
+  (let [occ (<- [?lat ?lon ?scientificname
                  ?kingdom ?phylum ?class ?orderrank ?family ?genus]
                 (occ-source :>> mol-fields))
         uniques (<- [?tax-uuid ?loc-uuid]
@@ -141,7 +267,7 @@
   "Return generator of unique coordinate tuples from supplied source of
    mol-fields. Assumes source contains valid coordinates."
   [source & {:keys [with-uuid] :or {with-uuid true}}]
-  (let [uniques (<- [?latitudeinterpreted ?longitudeinterpreted]
+  (let [uniques (<- [?lat ?lon]
                     (source :>> mol-fields)
                     (:distinct true))]
     (if with-uuid
