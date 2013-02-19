@@ -36,6 +36,15 @@
                  "?continentorocean" "?stateprovince" "?precision"
                  "?geospatialissue" "?lastindexed" "?season"])
 
+;; Ordered column names for MOL occ table schema that include
+;; tax-uuid, loc-uuid.
+(def occ-fields-extras ["?taxloc-uuid" "?tax-uuid" "?loc-uuid" "?uuid"
+                        "?occurrenceid" "?taxonid" "?dataresourceid"
+                        "?datecollected" "?theyear" "?themonth" "?basisofrecord"
+                        "?countryisointerpreted" "?locality" "?county"
+                        "?continentorocean" "?stateprovince" "?precision"
+                        "?geospatialissue" "?lastindexed" "?season"])
+
 (defn str->num-or-empty-str
   "Convert a string to a number with read-string and return it. If not a
    number, return an empty string.
@@ -188,7 +197,7 @@
 (defn valid-name?
   "Return true if name is valid, otherwise return false."
   [name]
-  (and (not= name nil) (not= name "")))
+  (and (not= name nil) (not= name "") (not (.contains name "\""))))
 
 (defn cleanup-data
   "Cleanup data by handling rounding, missing data, etc."
@@ -196,6 +205,21 @@
   (let [[lat lon clean-prec clean-year clean-month] (map str->num-or-empty-str [lat lon prec year month])]
     (concat (map (partial round-to digits) [lat lon clean-prec])
             (map str [clean-year clean-month]))))
+
+(defn quoter
+  "Return x surrounded in double quotes with any double quotes escaped with
+  double quotes, if needed."
+  [x]
+  (if (or (and (.startsWith x "\"") (.endsWith x "\""))
+          (= "" x)
+          (not (.contains x "\""))) 
+    x
+    (format "\"%s\"" (.replace x "\"" "\"\"") "\"" "\"\"")))
+  
+(defn quotemaster
+  "Maps quoter function over supplied vals."
+  [& vals]
+  (vec (map quoter vals)))
 
 (defn read-occurrences
   "Return Cascalog generator of GBIF tuples with valid Scientific name and
@@ -315,11 +339,20 @@
         taxloc-sink (hfs-textline (format "%s/taxloc" sink-path) :sinkmode :replace)
         taxloc-source (hfs-seqfile (format "%s/taxloc" source-path))
         occ-sink (hfs-textline (format "%s/occ" sink-path) :sinkmode :replace)
-        occ-source (hfs-seqfile (format "%s/occ" source-path))]
+        occ-source (hfs-seqfile (format "%s/occ" source-path))
+        occ-query (<- [?a ?b ?c ?d ?e ?f ?g ?h ?i ?j ?k ?l ?m ?n ?o ?p ?q ?r]
+                      (occ-source :>> occ-fields)
+                      (quotemaster ?taxloc-uuid ?uuid ?occurrenceid ?taxonid
+                              ?dataresourceid ?datecollected ?theyear ?themonth
+                              ?basisofrecord ?countryisointerpreted ?locality
+                              ?county ?continentorocean ?stateprovince
+                              ?precision ?geospatialissue ?lastindexed ?season :>
+                              ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j ?k ?l ?m ?n ?o ?p ?q
+                              ?r))]
     (?- loc-sink loc-source)
     (?- tax-sink tax-source)
     (?- taxloc-sink taxloc-source)
-    (?- occ-sink occ-source)))
+    (?- occ-sink occ-query)))
 
 (defmain BuildMasterDataset
   [source-path sink-path]
@@ -334,6 +367,42 @@
   (build-cartodb-views :source-path source-path :sink-path sink-path))
 
 (comment
+  (let [source-path (.getPath (io/resource "occ-test.tsv"))
+        sink-path "/tmp/gbifer/master"]
+    (BuildMasterDataset source-path sink-path))
+  (let [source-path "/tmp/gbifer/master"
+        sink-path "/tmp/gbifer/schema"]
+    (BuildCartoDBSchema source-path sink-path))
+  (let [source-path "/tmp/gbifer/schema"
+        sink-path "/tmp/gbifer/views"]
+    (BuildCartoDBViews source-path sink-path))
+
+  (defn quoter
+    [x]
+    (when (and (.startsWith x "\"") (.endsWith x "\""))
+      x
+      (format "\"%s\"" x)))
+  
+  (defn quotey
+    [& vals]
+    (vec (map #(format "\"%s\"" %) vals)))
+
+  (let [source (hfs-seqfile "/tmp/gbifer/schema/occ")
+        q (<- [?a ?b ?c ?d ?e ?f ?g ?h ?i ?j ?k ?l ?m ?n ?o ?p ?q ?r]
+              (source :>> occ-fields)
+              (quotey ?taxloc-uuid ?uuid ?occurrenceid ?taxonid ?dataresourceid ?datecollected ?theyear ?themonth
+                      ?basisofrecord ?countryisointerpreted ?locality ?county ?continentorocean ?stateprovince ?precision
+                      ?geospatialissue ?lastindexed ?season :> ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j ?k ?l ?m ?n ?o ?p ?q ?r))]
+    (?- (hfs-delimited "/tmp/gbifer/views/occ" :quote "\"") q))
+  
+  (let [source (hfs-seqfile "/tmp/gbifer/schema/occ")
+        q (<- [?a ?b ?c ?d ?e ?f ?g ?h ?i ?j ?k ?l ?m ?n ?o ?p ?q ?r]
+              (source :>> occ-fields)
+              (quotey ?taxloc-uuid ?uuid ?occurrenceid ?taxonid ?dataresourceid ?datecollected ?theyear ?themonth
+                      ?basisofrecord ?countryisointerpreted ?locality ?county ?continentorocean ?stateprovince ?precision
+                      ?geospatialissue ?lastindexed ?season :> ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j ?k ?l ?m ?n ?o ?p ?q ?r))]
+    (??- q))
+
   (let [dq (read-occurrences (.getPath (io/resource "occ-test.tsv")))
         lq (loc-query dq)
         tq (tax-query dq)]
